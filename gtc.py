@@ -39,7 +39,7 @@ TIME_ZONE = "Asia/Bangkok"
 BUNDLE_ID = "app.source.getcontact"
 CARRIER = ("510", "Indosat Ooredoo", "01")
 
-# Diffie-Hellman params (recovered from tools.naufalist.com key service; verified)
+# Diffie-Hellman params
 DH_P = 900719898367
 DH_G = 7
 
@@ -52,7 +52,7 @@ class GtcError(Exception):
     pass
 
 
-# --------------------------------------------------------------------------- crypto
+#  crypto
 def _sig(ts: str, message: str, key_hex: str) -> str:
     mac = hmac.new(bytes.fromhex(key_hex), f"{ts}-{message}".encode(), hashlib.sha256)
     return base64.b64encode(mac.digest()).decode()
@@ -91,8 +91,8 @@ def new_device_id() -> str:
     return secrets.token_hex(8)
 
 
-# --------------------------------------------------------------------------- http
-def _post(url: str, body: dict, headers: dict, timeout: int = 25) -> requests.Response:
+#  http
+def _post(url: str, body: str, headers: dict, timeout: int = 25) -> requests.Response:
     return requests.post(url, data=body, headers=headers, timeout=timeout)
 
 
@@ -126,7 +126,8 @@ def gtc_call(endpoint: str, payload: dict, *, token: str, final_key: str,
 
 
 def vfk_call(endpoint: str, payload: dict, device_id: str) -> tuple[int, dict]:
-    raw = json.dumps(payload, ensure_ascii=False)
+    """VerifyKit call — fixed version (compact JSON + App-Version 8.16.0)."""
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     ts = _ts()
     headers = {
         "Content-Type": "application/json",
@@ -134,15 +135,18 @@ def vfk_call(endpoint: str, payload: dict, device_id: str) -> tuple[int, dict]:
         "X-VFK-Client-Key": VFK_CLIENT_KEY,
         "X-VFK-Sdk-Version": "0.11.4",
         "X-VFK-Os": "android 9.0",
-        "X-VFK-App-Version": APP_VERSION,
+        "X-VFK-App-Version": "8.16.0",          # penting: jangan pakai APP_VERSION
         "X-VFK-Encrypted": "1",
         "X-VFK-Lang": "in_ID",
         "X-VFK-Req-Timestamp": ts,
         "X-VFK-Req-Signature": _sig(ts, raw, VFK_HMAC_KEY),
     }
-    body = json.dumps({"data": encrypt(raw, VFK_FINAL_KEY)})
+    body = json.dumps({"data": encrypt(raw, VFK_FINAL_KEY)}, separators=(",", ":"))
     r = _post(VFK_BASE + endpoint, body, headers)
-    parsed = r.json()
+    try:
+        parsed = r.json()
+    except ValueError:
+        raise GtcError(f"{endpoint}: non-JSON response (HTTP {r.status_code})")
     if "data" in parsed:
         parsed = json.loads(decrypt(parsed["data"], VFK_FINAL_KEY))
     return r.status_code, parsed
@@ -167,7 +171,7 @@ def save_store(store: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     CRED_FILE.write_text(json.dumps(store, indent=2), "utf-8")
     try:
-        os.chmod(CRED_FILE, 0o600)  # no-op on Windows, matters on POSIX
+        os.chmod(CRED_FILE, 0o600)
     except OSError:
         pass
 
@@ -193,7 +197,6 @@ def normalize_phone(raw: str) -> str:
 
 #  features
 def api_search(cred: dict, phone: str, source: str) -> dict:
-    # /v2.8/search -> profile (nama pemilik); /v2.8/number-detail -> daftar tag
     endpoint = "/v2.8/number-detail" if source == "tags" else "/v2.8/search"
     payload = {
         "countryCode": COUNTRY,
@@ -284,7 +287,7 @@ def cmd_batch(args) -> int:
             out.writerow([phone, "ok", prof.get("displayName", ""),
                           prof.get("tagCount", len(tags)), "|".join(tags), ""])
             print(f"ok   {phone}", file=sys.stderr)
-        except Exception as e:  # keep going: one bad number must not kill the batch
+        except Exception as e:
             out.writerow([raw, "error", "", "", "", str(e)])
             print(f"FAIL {raw}: {e}", file=sys.stderr)
         time.sleep(args.delay)
@@ -335,7 +338,8 @@ def cmd_captcha(args) -> int:
 
 
 def cmd_generate(args) -> int:
-    phone = normalize_phone(args.phone)
+    raw_phone = args.phone.strip()
+    phone = normalize_phone(raw_phone)
     device_id = new_device_id()
     priv, pub = dh_keypair()
 
@@ -368,10 +372,12 @@ def cmd_generate(args) -> int:
     print(f"token          : {token}")
 
     common = dict(token=token, final_key=final_key, device_id=device_id)
-    base = {"carrierCountryCode": CARRIER[0], "carrierName": CARRIER[1],
-            "carrierNetworkCode": CARRIER[2], "countryCode": COUNTRY,
-            "deviceName": DEVICE_NAME, "notificationToken": "", "timeZone": TIME_ZONE,
-            "token": token}
+    base = {
+        "carrierCountryCode": CARRIER[0], "carrierName": CARRIER[1],
+        "carrierNetworkCode": CARRIER[2], "countryCode": COUNTRY,
+        "deviceName": DEVICE_NAME, "notificationToken": "", "timeZone": TIME_ZONE,
+        "token": token,
+    }
     steps = [
         ("/v2.8/init-basic", base, 201),
         ("/v2.8/ad-settings", {"source": "init", "token": token}, 200),
@@ -384,30 +390,51 @@ def cmd_generate(args) -> int:
          {"app": "verifykit", "countryCode": COUNTRY, "notificationToken": "", "token": token}, 200),
     ]
     for endpoint, payload, want in steps:
-        code, _ = gtc_call(endpoint, payload, **common)
+        code, body = gtc_call(endpoint, payload, **common)
         if code != want:
             raise GtcError(f"{endpoint} failed: HTTP {code}")
         print(f"  ok {endpoint}")
 
-    outside = phone[3:] if phone.startswith("+62") else phone.lstrip("+")
-    code, _ = vfk_call("/v2.0/init", {
-        "isCallPermissionGranted": False, "countryCode": COUNTRY, "deviceName": "marlin",
-        "installedApps": '{"whatsapp":1,"telegram":0,"viber":0}', "outsideCountryCode": "ID",
-        "outsidePhoneNumber": outside, "timezone": TIME_ZONE, "bundleId": BUNDLE_ID}, device_id)
+    # ---------- VerifyKit (fixed) ----------
+    # 1. INIT
+    code, body = vfk_call("/v2.0/init", {
+        "isCallPermissionGranted": True,
+        "countryCode": "ID",
+        "deviceName": DEVICE_NAME,
+        "installedApps": '{"whatsapp":0,"telegram":0,"viber":0}',
+        "outsideCountryCode": "ID",
+        "outsidePhoneNumber": raw_phone,  
+        "timezone": TIME_ZONE,
+        "bundleId": BUNDLE_ID,
+    }, device_id)
     if code != 200:
-        raise GtcError(f"vfk init failed: HTTP {code}")
-    vfk_call("/v2.0/country", {"countryCode": COUNTRY, "bundleId": BUNDLE_ID}, device_id)
+        raise GtcError(f"vfk init failed: HTTP {code} — {dig(body, 'message') or dig(body, 'error') or body}")
 
-    # 2. vfk start -> whatsapp deeplink carrying the verification code
+    # 2. COUNTRY
+    code, body = vfk_call("/v2.0/country", {
+        "countryCode": "ID",
+        "bundleId": BUNDLE_ID,
+    }, device_id)
+    if code != 200:
+        raise GtcError(f"vfk country failed: HTTP {code}")
+
+    # 3. START → WhatsApp deeplink
     code, body = vfk_call("/v2.0/start", {
-        "countryCode": COUNTRY, "phoneNumber": phone, "app": "whatsapp",
-        "bundleId": BUNDLE_ID}, device_id)
+        "countryCode": "ID",
+        "mcc": CARRIER[0],
+        "mnc": CARRIER[2],
+        "phoneNumber": phone,  # E.164
+        "app": "whatsapp",
+        "bundleId": BUNDLE_ID,
+    }, device_id)
     deeplink = dig(body, "result.deeplink")
     reference = dig(body, "result.reference")
     if not deeplink or not reference:
         raise GtcError(f"vfk start failed (HTTP {code}): {body}")
+
     codes = re.findall(r"\*(.*?)\*", urllib.parse.unquote(deeplink))
     verification = next((c for c in codes if re.fullmatch(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+", c)), None)
+
     gtc_call("/v2.8/validation-start",
              {"app": "verifykit", "countryCode": COUNTRY, "notificationToken": "", "token": token},
              **common)
@@ -417,11 +444,15 @@ def cmd_generate(args) -> int:
     print(f"  code : {verification}")
     input("\nPress Enter after WhatsApp shows two checkmarks... ")
 
-    # 3. vfk check -> sessionId -> gtc verifykit-result
-    code, body = vfk_call("/v2.0/check", {"reference": reference, "bundleId": BUNDLE_ID}, device_id)
+    # 4. CHECK → sessionId → gtc verifykit-result
+    code, body = vfk_call("/v2.0/check", {
+        "reference": reference,
+        "bundleId": BUNDLE_ID,
+    }, device_id)
     session_id = dig(body, "result.sessionId")
     if not session_id:
         raise GtcError(f"Verification not completed yet (HTTP {code}): {body}")
+
     code, body = gtc_call("/v2.8/verifykit-result",
                           {"sessionId": session_id, "token": token}, **common)
     validation_date = dig(body, "result.validationDate")
@@ -432,8 +463,11 @@ def cmd_generate(args) -> int:
     name = args.name or phone
     store.setdefault("credentials", {})[name] = {
         "description": args.description or f"Generated {validation_date}",
-        "phoneNumber": phone, "clientDeviceId": device_id,
-        "finalKey": final_key, "token": token, "validationDate": validation_date,
+        "phoneNumber": phone,
+        "clientDeviceId": device_id,
+        "finalKey": final_key,
+        "token": token,
+        "validationDate": validation_date,
     }
     store["active"] = store.get("active") or name
     save_store(store)
@@ -541,12 +575,11 @@ BANNER = r"""
 ██║   ██║██╔══╝     ██║   ██║     ██║   ██║██║╚██╗██║   ██║   ██╔══██║██║        ██║   
 ╚██████╔╝███████╗   ██║   ╚██████╗╚██████╔╝██║ ╚████║   ██║   ██║  ██║╚██████╗   ██║   
  ╚═════╝ ╚══════╝   ╚═╝    ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝   ╚═╝                                                                            
-By mfajarb
+By mfajarb 
 """
 
 
 def print_startup(args) -> None:
-    """Banner + startup log on stderr (stdout stays pipe-clean)."""
     tty = sys.stderr.isatty()
     c, d, r = ("\033[36m", "\033[2m", "\033[0m") if tty else ("", "", "")
     print(f"{c}{BANNER}{r}", file=sys.stderr)
@@ -560,8 +593,6 @@ def print_startup(args) -> None:
 
 
 class _Tee:
-    """Mirror stdout into a per-run file. ponytail: no rotation/size cap; add if results/ grows."""
-
     def __init__(self, stream, fh):
         self._s, self._f = stream, fh
 
@@ -607,7 +638,6 @@ def ask(prompt: str) -> str:
 
 
 def interactive() -> int:
-    """Menu untuk pengguna non-teknis. ponytail: input() polos, tanpa arrow-key; cukup untuk sekarang."""
     print(BANNER)
     while True:
         print("Pilih fitur:")
@@ -617,80 +647,58 @@ def interactive() -> int:
         choice = ask("Nomor pilihan: ")
         if choice in ("0", "q", "keluar", ""):
             return 0
-        if not choice.isdigit() or not 1 <= int(choice) <= len(MENU):
-            print("Pilihan tidak ada. Coba lagi.\n")
-            continue
-        action = MENU[int(choice) - 1][1]
-
-        if action in ("profile", "tags"):
-            phone = ask("Nomor HP target (contoh 08123456789): ")
-            if not phone:
-                print("Nomor kosong, dibatalkan.\n")
-                continue
-            argv = ["search", phone, "--type", action]
-        elif action == "quota":
-            argv = ["quota"]
-        elif action == "batch":
-            path = ask("Path file CSV: ").strip('"')
-            if not path:
-                print("Path kosong, dibatalkan.\n")
-                continue
-            argv = ["batch", path]
-        elif action == "captcha":
-            argv = ["captcha"]
-        elif action == "credlist":
-            argv = ["cred", "list"]
-        else:
-            phone = ask("Nomor HP WhatsApp Anda: ")
-            if not phone:
-                print("Nomor kosong, dibatalkan.\n")
-                continue
-            argv = ["generate", phone]
-
-        print()
         try:
-            main(argv)
-        except SystemExit:
-            pass
-        except Exception as e:  # menu harus tetap hidup walau satu perintah gagal
-            print(f"error: {type(e).__name__}: {e}")
-        print()
-        if ask("Enter untuk kembali ke menu, 'q' untuk keluar: ").lower() == "q":
-            return 0
-        print()
+            idx = int(choice) - 1
+            if not (0 <= idx < len(MENU)):
+                print("Pilihan tidak valid.\n")
+                continue
+        except ValueError:
+            print("Masukkan angka.\n")
+            continue
+
+        action = MENU[idx][1]
+        try:
+            if action == "profile":
+                phone = ask("Nomor telepon: ")
+                sys.argv = ["gtc", "search", phone, "-t", "profile"]
+            elif action == "tags":
+                phone = ask("Nomor telepon: ")
+                sys.argv = ["gtc", "search", phone, "-t", "tags"]
+            elif action == "quota":
+                sys.argv = ["gtc", "quota"]
+            elif action == "batch":
+                csv_path = ask("Path file CSV: ")
+                sys.argv = ["gtc", "batch", csv_path]
+            elif action == "captcha":
+                sys.argv = ["gtc", "captcha"]
+            elif action == "credlist":
+                sys.argv = ["gtc", "cred", "list"]
+            elif action == "generate":
+                phone = ask("Nomor WhatsApp (untuk verifikasi): ")
+                sys.argv = ["gtc", "generate", phone]
+            else:
+                continue
+
+            args = build_parser().parse_args()
+            print_startup(args)
+            return args.func(args)
+        except GtcError as e:
+            print(f"Error: {e}\n")
+        except Exception as e:
+            print(f"Unexpected error: {e}\n")
 
 
-def main(argv=None) -> int:
-    if argv is None and len(sys.argv) == 1:
-        os.environ["GTC_NO_BANNER"] = "1"
+def main() -> int:
+    if len(sys.argv) == 1:
         return interactive()
-    args = build_parser().parse_args(argv)
-    if not os.environ.get("GTC_NO_BANNER"):
-        print_startup(args)
-    if getattr(args, "out", None) in (None, "-") and args.cmd == "batch":
-        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        args.out = str(RESULTS_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}-batch.csv")
-    result_path = open_result_file(args)
-    fh = result_path.open("w", encoding="utf-8")
-    real_stdout, sys.stdout = sys.stdout, _Tee(sys.stdout, fh)
+    parser = build_parser()
+    args = parser.parse_args()
+    print_startup(args)
     try:
         return args.func(args)
     except GtcError as e:
-        print(f"error: {e}", file=sys.stderr)
+        print(f"Error: {e}", file=sys.stderr)
         return 1
-    except requests.RequestException as e:
-        print(f"network error: {e}", file=sys.stderr)
-        return 2
-    except KeyboardInterrupt:
-        return 130
-    except (OSError, ValueError, KeyError) as e:
-        print(f"error: {type(e).__name__}: {e}", file=sys.stderr)
-        return 1
-    finally:
-        sys.stdout = real_stdout
-        fh.close()
-        print(f"\033[2m  saved     {result_path}\033[0m" if sys.stderr.isatty()
-              else f"  saved     {result_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":
