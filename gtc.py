@@ -135,7 +135,7 @@ def vfk_call(endpoint: str, payload: dict, device_id: str) -> tuple[int, dict]:
         "X-VFK-Client-Key": VFK_CLIENT_KEY,
         "X-VFK-Sdk-Version": "0.11.4",
         "X-VFK-Os": "android 9.0",
-        "X-VFK-App-Version": "8.16.0",          # penting: jangan pakai APP_VERSION
+        "X-VFK-App-Version": "8.16.0",         
         "X-VFK-Encrypted": "1",
         "X-VFK-Lang": "in_ID",
         "X-VFK-Req-Timestamp": ts,
