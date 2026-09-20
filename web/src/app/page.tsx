@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import styles from "./page.module.css";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -36,7 +37,9 @@ function PaymentModal({
   // QRIS / Payment state
   const [payStatus, setPayStatus] = useState<PaymentStatus>("idle");
   const [orderId, setOrderId] = useState<string | null>(null);
-  const [qrisUrl, setQrisUrl] = useState<string | null>(null);
+  const [qrString, setQrString] = useState<string | null>(null);
+  const [paymentUrl, setPaymentUrl] = useState<string | null>(null);
+  const [expiredAt, setExpiredAt] = useState<string | null>(null);
   const [payError, setPayError] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -90,10 +93,12 @@ function PaymentModal({
       if (!res.ok) throw new Error(data.error ?? "Gagal membuat transaksi");
 
       setOrderId(data.orderId);
-      setQrisUrl(data.qrisUrl ?? null);
+      setQrString(data.qrString ?? null);
+      setPaymentUrl(data.paymentUrl ?? null);
+      setExpiredAt(data.expiredAt ?? null);
       setPayStatus("waiting");
 
-      // Poll for payment status every 3 seconds
+      // Poll every 4 seconds — also backed by Pakasir Transaction Detail API
       pollRef.current = setInterval(async () => {
         try {
           const sr = await fetch(`/api/payment/status?orderId=${data.orderId}`);
@@ -108,7 +113,7 @@ function PaymentModal({
             setPayError("Transaksi kadaluarsa. Coba lagi.");
           }
         } catch { /* ignore poll errors */ }
-      }, 3000);
+      }, 4000);
 
     } catch (e: unknown) {
       setPayStatus("error");
@@ -235,29 +240,43 @@ function PaymentModal({
               <>
                 <div className={styles.qrisFrame}>
                   <div className={styles.qrisInner}>
-                    {qrisUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img className={styles.qrisImage} src={qrisUrl} alt="QRIS" />
+                    {qrString ? (
+                      <QRCodeSVG
+                        value={qrString}
+                        size={200}
+                        bgColor="#ffffff"
+                        fgColor="#000000"
+                        level="M"
+                      />
                     ) : (
                       <div className={styles.qrisPlaceholder}>
                         <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="#999" strokeWidth="1.5">
                           <rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" />
                           <rect x="3" y="14" width="7" height="7" />
                         </svg>
-                        <span style={{ fontSize: 12, color: "#888" }}>Buka Pakasir untuk scan</span>
+                        <span style={{ fontSize: 12, color: "#888" }}>QR tidak tersedia</span>
                       </div>
                     )}
                   </div>
                 </div>
                 <div className={styles.qrisAmount}>Rp 500</div>
                 {orderId && <div className={styles.orderId}>ID: {orderId}</div>}
+                {expiredAt && (
+                  <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                    Berlaku hingga: {new Date(expiredAt).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}
+                  </div>
+                )}
                 <div className={styles.waitingPulse}>
                   <span className={styles.pulseDot} />
                   Menunggu pembayaran...
                 </div>
                 <p style={{ fontSize: 12, color: "var(--text-muted)", textAlign: "center", lineHeight: 1.5 }}>
-                  Scan QR di atas menggunakan aplikasi e-wallet / m-banking. <br/>
-                  Pembayaran akan terverifikasi otomatis.
+                  Scan QR di atas atau buka{" "}
+                  {paymentUrl && (
+                    <a href={paymentUrl} target="_blank" rel="noreferrer"
+                      style={{ color: "var(--cyan)", fontWeight: 600 }}>halaman pembayaran</a>
+                  )}{" "}
+                  menggunakan e-wallet / m-banking.
                 </p>
               </>
             )}
@@ -286,7 +305,7 @@ function PaymentModal({
                 </div>
                 <button
                   className={`${styles.modalBtn} ${styles.primary}`}
-                  onClick={() => { setPayStatus("idle"); setPayError(""); setOrderId(null); setQrisUrl(null); }}
+                  onClick={() => { setPayStatus("idle"); setPayError(""); setOrderId(null); setQrString(null); setPaymentUrl(null); }}
                 >
                   Coba Lagi
                 </button>

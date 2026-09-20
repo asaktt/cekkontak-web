@@ -18,11 +18,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Create order in our store
+  // Create order in our store first
   const order = createOrder(phone);
 
-  // Create QRIS transaction at Pakasir
   try {
+    // POST to Pakasir API — returns QR string (payment_number), not image
     const res = await fetch(`${PAKASIR_BASE}/api/transactioncreate/qris`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -36,20 +36,24 @@ export async function POST(req: NextRequest) {
 
     const data = await res.json();
 
-    // Pakasir returns qris_image_url or similar — store it
-    const qrisUrl: string | null =
-      data?.qris_image_url ?? data?.qr_image ?? data?.qr_url ?? null;
+    // Pakasir response: { payment: { payment_number, expired_at, ... } }
+    const qrString: string | null = data?.payment?.payment_number ?? null;
+    const expiredAt: string | null = data?.payment?.expired_at ?? null;
 
-    if (qrisUrl) {
-      setOrderQrisUrl(order.orderId, qrisUrl);
+    if (qrString) {
+      // Store the QR string — frontend will render it using a QR library
+      setOrderQrisUrl(order.orderId, qrString);
     }
+
+    // Also build the fallback payment URL (link-based, user redirected)
+    const paymentUrl = `${PAKASIR_BASE}/pay/${project}/500?order_id=${order.orderId}&qris_only=1&redirect=https://cekkontak.online`;
 
     return NextResponse.json({
       orderId: order.orderId,
       amount: 500,
-      qrisUrl,
-      // Fallback: if Pakasir returns a payment_url (link-based)
-      paymentUrl: data?.payment_url ?? data?.url ?? null,
+      qrString,        // Raw QR string — render with QR library on frontend
+      paymentUrl,      // Fallback: open Pakasir payment page
+      expiredAt,
     });
   } catch (e: unknown) {
     return NextResponse.json(

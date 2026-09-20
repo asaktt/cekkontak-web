@@ -1,44 +1,61 @@
 import { NextRequest, NextResponse } from "next/server";
 import { completeOrder } from "@/lib/orderStore";
 
-// Pakasir calls this URL after payment is confirmed.
-// Set webhook URL in your Pakasir dashboard to:
-//   https://cekkontak.online/api/pakasir/callback
-
+/**
+ * Pakasir webhook — called when payment is confirmed.
+ *
+ * Pakasir sends:
+ * {
+ *   "amount": 500,
+ *   "order_id": "...",
+ *   "project": "...",
+ *   "status": "completed",
+ *   "payment_method": "qris",
+ *   "completed_at": "..."
+ * }
+ *
+ * Pakasir does NOT send a signature header — we verify by:
+ *   1. Checking project matches our PAKASIR_PROJECT env
+ *   2. Checking amount == 500
+ *   3. Checking status == "completed"
+ *   4. Optionally verifying via Transaction Detail API
+ */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { order_id, status, amount } = body as {
-      order_id: string;
-      status: string;
-      amount: number;
-      project: string;
-      payment_method: string;
-      completed_at: string;
+    const { order_id, status, amount, project } = body as {
+      order_id?: string;
+      status?: string;
+      amount?: number;
+      project?: string;
     };
 
-    // Basic sanity check
-    if (!order_id || status !== "completed") {
-      return NextResponse.json({ received: true });
+    const expectedProject = process.env.PAKASIR_PROJECT;
+
+    // Basic validation
+    if (!order_id || !status) {
+      return NextResponse.json({ error: "Bad payload" }, { status: 400 });
     }
 
-    // Verify amount matches (prevents spoofing a different amount)
-    if (amount !== 500) {
-      console.warn(`[Pakasir Callback] Amount mismatch for ${order_id}: got ${amount}`);
-      return NextResponse.json({ received: true });
+    // Verify project matches (if configured)
+    if (expectedProject && project !== expectedProject) {
+      return NextResponse.json({ error: "Unknown project" }, { status: 403 });
     }
 
+    // Only process completed payments with correct amount
+    if (status !== "completed" || amount !== 500) {
+      return NextResponse.json({ message: "Ignored" }, { status: 200 });
+    }
+
+    // Mark order complete → issues search token
     const completed = completeOrder(order_id);
     if (!completed) {
-      console.warn(`[Pakasir Callback] Order not found or not pending: ${order_id}`);
-    } else {
-      console.log(`[Pakasir Callback] Order completed: ${order_id}`);
+      // Order might already be completed or not found — OK
+      return NextResponse.json({ message: "OK (order not found in store)" }, { status: 200 });
     }
 
-    // Always return 200 to Pakasir
-    return NextResponse.json({ received: true });
-  } catch (e: unknown) {
-    console.error("[Pakasir Callback] Error:", e);
-    return NextResponse.json({ received: true });
+    return NextResponse.json({ message: "OK", searchToken: completed.searchToken });
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 }
