@@ -1,0 +1,144 @@
+/* ── Reset ─────────────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ── Design Tokens — uiverse.io inspired ───────────────────────────────────── */
+:root {
+  /* Background */
+  --bg: #030508;
+  --bg-card: rgba(8, 12, 24, 0.8);
+  --bg-elevated: rgba(15, 20, 40, 0.6);
+
+  /* Surfaces */
+  --surface: rgba(255, 255, 255, 0.03);
+  --surface-hover: rgba(255, 255, 255, 0.06);
+  --surface-active: rgba(255, 255, 255, 0.09);
+
+  /* Borders */
+  --border: rgba(255, 255, 255, 0.07);
+  --border-hover: rgba(255, 255, 255, 0.14);
+  --border-focus: rgba(139, 92, 246, 0.7);
+  --border-glow: rgba(139, 92, 246, 0.4);
+
+  /* Text */
+  --text-primary: #eef2ff;
+  --text-secondary: #94a3c8;
+  --text-muted: #3d4a6e;
+  --text-disabled: #2a3352;
+
+  /* Accent — Purple/Violet */
+  --accent: #8b5cf6;
+  --accent-light: #a78bfa;
+  --accent-dark: #6d28d9;
+  --accent-glow: rgba(139, 92, 246, 0.3);
+  --accent-glow-strong: rgba(139, 92, 246, 0.5);
+
+  /* Secondary — Cyan */
+  --cyan: #22d3ee;
+  --cyan-dark: #0891b2;
+  --cyan-glow: rgba(34, 211, 238, 0.25);
+
+  /* Semantic */
+  --green: #34d399;
+  --green-glow: rgba(52, 211, 153, 0.25);
+  --green-bg: rgba(52, 211, 153, 0.08);
+  --green-border: rgba(52, 211, 153, 0.25);
+
+  --red: #f87171;
+  --red-bg: rgba(248, 113, 113, 0.07);
+  --red-border: rgba(248, 113, 113, 0.2);
+
+  --amber: #fbbf24;
+  --amber-bg: rgba(251, 191, 36, 0.08);
+  --amber-border: rgba(251, 191, 36, 0.25);
+
+  /* Radius */
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-full: 9999px;
+
+  /* Transitions */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --transition: 0.2s var(--ease);
+  --transition-slow: 0.4s var(--ease);
+}
+
+/* ── Base ───────────────────────────────────────────────────────────────────── */
+html, body {
+  height: 100%;
+  background-color: var(--bg);
+  color: var(--text-primary);
+  font-family: var(--font-inter), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.6;
+}
+
+/* ── Scrollbar ──────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.3);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 92, 246, 0.5);
+}
+
+/* ── Selection ──────────────────────────────────────────────────────────────── */
+::selection {
+  background: rgba(139, 92, 246, 0.35);
+  color: var(--text-primary);
+}
+
+/* ── Shared Animations ─────────────────────────────────────────────────────── */
+@keyframes shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 20px var(--accent-glow), 0 0 40px transparent; }
+  50% { box-shadow: 0 0 30px var(--accent-glow-strong), 0 0 60px var(--accent-glow); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translate(0, 0) scale(1) rotate(0deg); }
+  33% { transform: translate(15px, -20px) scale(1.04) rotate(1deg); }
+  66% { transform: translate(-10px, 12px) scale(0.97) rotate(-1deg); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.95) translateY(10px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 8px var(--green); }
+  50% { opacity: 0.6; transform: scale(0.8); box-shadow: 0 0 4px var(--green); }
+}
+
+@keyframes border-glow {
+  0%, 100% { border-color: rgba(139, 92, 246, 0.4); }
+  50% { border-color: rgba(139, 92, 246, 0.8); }
+}
