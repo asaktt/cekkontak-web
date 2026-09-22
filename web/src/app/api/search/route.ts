@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { consumeSearchToken } from "@/lib/orderStore";
+import { consumePromoToken } from "@/lib/promoStore";
+import { rateLimit, getIp } from "@/lib/rateLimit";
 
 // ── Config (mirrors gtc.py constants) ──────────────────────────────────────
 const GTC_BASE = "https://pbssrv-centralevents.com";
@@ -101,13 +103,21 @@ function dig(obj: unknown, path: string, def: unknown = null): unknown {
   return cur;
 }
 
-// ── Promo token store (inline, shared with promo/use route via module cache) ─
-// NOTE: We re-implement a simple version here since Next.js module isolation
-// makes cross-route module sharing tricky. The promo/use route issues the token
-// and stores it; we validate against the same in-memory Map via shared module.
-
 // ── Handler ────────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
+  // Rate limit: 10 searches per minute per IP
+  const ip = getIp(req.headers);
+  const rl = rateLimit(ip, "search", 10, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: "Terlalu banyak permintaan. Coba lagi dalam beberapa saat." },
+      {
+        status: 429,
+        headers: { "Retry-After": String(Math.ceil(rl.resetInMs / 1000)) },
+      }
+    );
+  }
+
   const { phone: rawPhone, searchToken } = await req.json();
 
   if (!rawPhone) {
@@ -122,20 +132,11 @@ export async function POST(req: NextRequest) {
   }
 
   // Validate token — try payment token first, then promo token
-  // Payment token: from orderStore
+  // Payment token: from orderStore (in-memory)
   const paymentResult = consumeSearchToken(searchToken);
 
-  // Promo token: dynamic import to share module instance
-  let promoPhoneResult: { phone: string } | null = null;
-  if (!paymentResult) {
-    // Import promo token consumer from the promo/use module
-    try {
-      const { consumePromoToken } = await import("@/app/api/promo/use/route");
-      promoPhoneResult = consumePromoToken(searchToken);
-    } catch {
-      // ignore
-    }
-  }
+  // Promo token: Redis-backed via promoStore
+  const promoPhoneResult = paymentResult ? null : await consumePromoToken(searchToken);
 
   const resolvedPhone = paymentResult?.phone ?? promoPhoneResult?.phone ?? null;
 

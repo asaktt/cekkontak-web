@@ -13,7 +13,8 @@ export async function GET(req: NextRequest) {
   if (!(await verifyAdminToken(req))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  return NextResponse.json({ promos: getAllPromos() });
+  const promos = await getAllPromos();
+  return NextResponse.json({ promos });
 }
 
 // POST /api/admin/promos — create a new promo
@@ -29,7 +30,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Kode minimal 3 karakter" }, { status: 400 });
   }
 
-  const promo = createPromo({
+  const promo = await createPromo({
     code: code.trim(),
     isActive,
     expiresAt,
@@ -52,7 +53,7 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Kode diperlukan" }, { status: 400 });
   }
 
-  const updated = updatePromo(code, patch);
+  const updated = await updatePromo(code, patch);
   if (!updated) {
     return NextResponse.json({ error: "Promo tidak ditemukan" }, { status: 404 });
   }
@@ -71,7 +72,7 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: "Kode diperlukan" }, { status: 400 });
   }
 
-  const deleted = deletePromo(code);
+  const deleted = await deletePromo(code);
   if (!deleted) {
     return NextResponse.json({ error: "Promo tidak ditemukan" }, { status: 404 });
   }

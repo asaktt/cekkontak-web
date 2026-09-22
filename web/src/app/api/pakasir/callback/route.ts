@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { completeOrder } from "@/lib/orderStore";
+import { completeOrder, decodePhoneFromOrderId } from "@/lib/orderStore";
 
 /**
  * Pakasir webhook — called when payment is confirmed.
@@ -48,7 +48,9 @@ export async function POST(req: NextRequest) {
     }
 
     // Mark order complete → issues search token
-    const completed = completeOrder(order_id);
+    // decodePhoneFromOrderId provides resilience after cold starts
+    const phone = decodePhoneFromOrderId(order_id) ?? undefined;
+    const completed = completeOrder(order_id, phone);
     if (!completed) {
       // Order might already be completed or not found — OK
       return NextResponse.json({ message: "OK (order not found in store)" }, { status: 200 });

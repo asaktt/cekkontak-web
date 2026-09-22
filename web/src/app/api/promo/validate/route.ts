@@ -7,7 +7,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ valid: false, reason: "Kode tidak valid" });
   }
 
-  const result = validatePromo(code.trim());
+  const result = await validatePromo(code.trim());
   if (result.valid) {
     return NextResponse.json({ valid: true });
   }

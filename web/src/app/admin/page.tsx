@@ -348,7 +348,7 @@ export default function AdminDashboard() {
 
         {/* Footer */}
         <div style={{ textAlign: "center", fontSize: 12, color: "var(--text-muted)" }}>
-          CekKontak Admin · Data reset setiap cold start server
+          CekKontak Admin · Data tersimpan di Upstash Redis
         </div>
       </div>
     </div>

@@ -1,0 +1,29 @@
+{
+  "name": "CekKontak — Cek Tag Nomor HP",
+  "short_name": "CekKontak",
+  "description": "Cek siapa yang menyimpan nomor HP kamu via GetContact. Hasil instan, aman, Rp 500.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#080808",
+  "theme_color": "#f97316",
+  "orientation": "portrait-primary",
+  "lang": "id",
+  "scope": "/",
+  "categories": ["utilities", "productivity"],
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/favicon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable any"
+    }
+  ],
+  "screenshots": [],
+  "prefer_related_applications": false
+}

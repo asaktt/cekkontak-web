@@ -1,19 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { validatePromo, consumePromo } from "@/lib/promoStore";
+import { validatePromo, consumePromo, savePromoToken } from "@/lib/promoStore";
 import crypto from "crypto";
-
-// Temporary token store: token → phone (1-time use, 10-min TTL)
-const promoTokens = new Map<string, { phone: string; expiresAt: number }>();
-
-// Clean up expired tokens periodically
-setInterval(() => {
-  const now = Date.now();
-  for (const [token, data] of promoTokens) {
-    if (data.expiresAt < now) promoTokens.delete(token);
-  }
-}, 60_000);
+import { rateLimit, getIp } from "@/lib/rateLimit";
 
 export async function POST(req: NextRequest) {
+  // Rate limit: max 10 promo attempts per minute per IP (brute-force prevention)
+  const ip = getIp(req.headers);
+  const rl = rateLimit(ip, "promo", 10, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { success: false, reason: "Terlalu banyak percobaan. Coba lagi sebentar." },
+      { status: 429, headers: { "Retry-After": String(Math.ceil(rl.resetInMs / 1000)) } }
+    );
+  }
+
   const { code, phone } = await req.json();
 
   if (!code || !phone) {
@@ -23,31 +23,21 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const validation = validatePromo(code.trim());
+  const validation = await validatePromo(code.trim());
   if (!validation.valid) {
     return NextResponse.json({ success: false, reason: validation.reason });
   }
 
-  // Consume the promo (decrement usedCount)
-  const consumed = consumePromo(code.trim());
+  // Consume the promo (increment usedCount)
+  const consumed = await consumePromo(code.trim());
   if (!consumed) {
     return NextResponse.json({ success: false, reason: "Gagal menggunakan promo" });
   }
 
-  // Issue a one-time search token for this phone number
+  // Issue a one-time search token, persisted in Redis (10-min TTL)
   const searchToken = crypto.randomBytes(24).toString("hex");
-  promoTokens.set(searchToken, {
-    phone,
-    expiresAt: Date.now() + 10 * 60 * 1000, // 10 minutes
-  });
+  await savePromoToken(searchToken, phone);
 
   return NextResponse.json({ success: true, searchToken });
 }
 
-// Export for use by search route
-export function consumePromoToken(token: string): { phone: string } | null {
-  const data = promoTokens.get(token);
-  if (!data || data.expiresAt < Date.now()) return null;
-  promoTokens.delete(token); // one-time use
-  return { phone: data.phone };
-}

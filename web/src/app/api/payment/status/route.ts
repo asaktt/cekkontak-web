@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getOrder, completeOrder } from "@/lib/orderStore";
+import { getOrder, completeOrder, decodePhoneFromOrderId } from "@/lib/orderStore";
 
-const PAKASIR_BASE = "https://app.pakasir.com";
+const CASAKU_BASE = "https://api.casaku.id";
 
 export async function GET(req: NextRequest) {
   const orderId = req.nextUrl.searchParams.get("orderId");
@@ -10,12 +10,9 @@ export async function GET(req: NextRequest) {
   }
 
   const order = getOrder(orderId);
-  if (!order) {
-    return NextResponse.json({ error: "Order tidak ditemukan" }, { status: 404 });
-  }
 
-  // If already completed, just return token
-  if (order.status === "completed") {
+  // If already completed in store, return token immediately
+  if (order?.status === "completed") {
     return NextResponse.json({
       orderId: order.orderId,
       status: "completed",
@@ -23,39 +20,51 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  if (order.status === "expired") {
+  if (order?.status === "expired") {
     return NextResponse.json({ orderId: order.orderId, status: "expired", searchToken: null });
   }
 
-  // Double-check with Pakasir Transaction Detail API for accuracy
-  const project = process.env.PAKASIR_PROJECT;
-  const apiKey = process.env.PAKASIR_API_KEY;
+  // Always query Casaku directly — authoritative source, also works after cold starts
+  const licenseKey = process.env.CASAKU_LICENSE_KEY;
+  const casakuTxId = order?.casaku_txid;
 
-  if (project && apiKey) {
+  if (licenseKey && casakuTxId) {
     try {
-      const res = await fetch(
-        `${PAKASIR_BASE}/api/transactiondetail?project=${project}&amount=500&order_id=${orderId}&api_key=${apiKey}`
-      );
-      const data = await res.json();
-      const txStatus = data?.transaction?.status;
+      const res = await fetch(`${CASAKU_BASE}/api/generate/check-status`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-license-key": licenseKey,
+        },
+        body: JSON.stringify({ transactionId: casakuTxId }),
+      });
 
-      if (txStatus === "completed") {
-        // Complete in our store if not already done
-        const completed = completeOrder(orderId);
+      const data = await res.json();
+      // Casaku status values: "pending" | "paid" | "cancel" | "expired"
+      const txStatus: string = data?.data?.status ?? data?.status ?? "";
+
+      if (txStatus === "paid") {
+        // Decode phone from orderId for cold-start resilience
+        const phone = order?.phone ?? decodePhoneFromOrderId(orderId) ?? "";
+        const completed = completeOrder(orderId, phone);
         return NextResponse.json({
           orderId,
           status: "completed",
-          searchToken: completed?.searchToken ?? order.searchToken,
+          searchToken: completed?.searchToken ?? null,
         });
       }
+
+      if (txStatus === "cancel" || txStatus === "expired") {
+        return NextResponse.json({ orderId, status: "expired", searchToken: null });
+      }
     } catch {
-      // Ignore fetch errors — webhook will handle completion
+      // If Casaku unreachable, fall through to pending
     }
   }
 
   return NextResponse.json({
-    orderId: order.orderId,
-    status: order.status,
+    orderId: order?.orderId ?? orderId,
+    status: order?.status ?? "pending",
     searchToken: null,
   });
 }
