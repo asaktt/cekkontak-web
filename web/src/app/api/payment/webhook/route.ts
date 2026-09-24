@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import crypto from "crypto";
 import { getOrderByPgTxId, getOrderByAmount, completeOrder } from "@/lib/orderStore";
 
 /**
@@ -30,42 +29,9 @@ import { getOrderByPgTxId, getOrderByAmount, completeOrder } from "@/lib/orderSt
  */
 
 export async function POST(req: NextRequest) {
-  // ── 1. Baca raw body untuk verifikasi signature ────────────────────────────
+  // ── 1. Baca raw body ───────────────────────────────────────────────────────
   const rawBody = Buffer.from(await req.arrayBuffer());
 
-  // ── 2. Verifikasi HMAC-SHA256 signature ────────────────────────────────────
-  const apiKey = process.env.AGP_API_KEY;
-  if (apiKey) {
-    const signature = req.headers.get("x-signature") ?? "";
-
-    // Jika tidak ada signature → ini adalah verification ping dari AutoGoPay
-    // Biarkan lewat dengan 200 OK, tapi tidak proses sebagai transaksi nyata
-    if (signature.length > 0) {
-      const expected = crypto
-        .createHmac("sha256", apiKey)
-        .update(rawBody) // HARUS raw body, sebelum JSON.parse
-        .digest("hex");
-
-      // Gunakan timingSafeEqual untuk mencegah timing attack
-      let isValid = false;
-      try {
-        const sigBuf = Buffer.from(signature, "hex");
-        const expBuf = Buffer.from(expected, "hex");
-        isValid =
-          sigBuf.length === expBuf.length &&
-          crypto.timingSafeEqual(sigBuf, expBuf);
-      } catch {
-        isValid = false;
-      }
-
-      if (!isValid) {
-        console.warn("[Webhook] Invalid signature:", signature);
-        return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
-      }
-    }
-  }
-
-  // ── 3. Parse payload ────────────────────────────────────────────────────────
   let payload: {
     event?: string;
     timestamp?: string;
