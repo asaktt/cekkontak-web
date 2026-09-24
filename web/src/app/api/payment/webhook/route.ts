@@ -1,37 +1,59 @@
 import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
 import { getOrderByPgTxId, getOrderByAmount, completeOrder } from "@/lib/orderStore";
 
 /**
  * AutoGoPay Webhook Handler
  *
- * Dipanggil otomatis oleh AutoGoPay saat transaksi ShopeePay berhasil dibayar.
+ * AutoGoPay mengirim POST saat transaksi ShopeePay berhasil dibayar.
+ * Header X-Signature berisi HMAC-SHA256 dari raw body menggunakan API key.
  *
- * Payload yang dikirim AutoGoPay:
- * {
- *   "event": "transaction.received",
- *   "timestamp": "2024-03-29 14:30:45",
- *   "transaction": {
- *     "id": "TRX-001",
- *     "time": "2024-03-29 14:30:40",
- *     "amount": 500,
- *     "currency": "IDR",
- *     "payment_type": "qris",
- *     "status": "settlement",
- *     "issuer": "shopeepay"
- *   }
- * }
- *
- * Security: AutoGoPay menandatangani payload dengan HMAC-SHA256 via header X-Signature.
- * Verifikasi wajib dilakukan terhadap raw body sebelum parse JSON.
- *
- * Daftarkan URL webhook di: https://pg.sphixray.com → Pengaturan → Webhook
- * URL: https://cekkontak.online/api/payment/webhook
+ * URL: https://www.cekkontak.online/api/payment/webhook
  */
 
-export async function POST(req: NextRequest) {
-  // ── 1. Baca raw body ───────────────────────────────────────────────────────
-  const rawBody = Buffer.from(await req.arrayBuffer());
+function verifySignature(rawBody: Buffer, signature: string, apiKey: string): boolean {
+  if (!signature) return false;
 
+  // AutoGoPay menggunakan bagian setelah prefix "agp_" sebagai HMAC secret
+  const secret = apiKey.replace(/^agp_/, "");
+
+  // Coba berbagai format signature (hex dan base64)
+  const hmacHex = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+  const hmacB64 = crypto.createHmac("sha256", secret).update(rawBody).digest("base64");
+
+  // Juga coba dengan full API key (fallback)
+  const hmacFullHex = crypto.createHmac("sha256", apiKey).update(rawBody).digest("hex");
+  const hmacFullB64 = crypto.createHmac("sha256", apiKey).update(rawBody).digest("base64");
+
+  const candidates = [hmacHex, hmacB64, hmacFullHex, hmacFullB64];
+
+  return candidates.some((candidate) => {
+    try {
+      const isBase64 = signature.includes("=") || /^[A-Za-z0-9+/]+=*$/.test(signature);
+      const encoding = isBase64 ? "base64" : "hex";
+      const sigBuf = Buffer.from(signature, encoding);
+      const canBuf = Buffer.from(candidate, encoding);
+      return sigBuf.length > 0 && sigBuf.length === canBuf.length && crypto.timingSafeEqual(sigBuf, canBuf);
+    } catch {
+      return candidate === signature;
+    }
+  });
+}
+
+export async function POST(req: NextRequest) {
+  const rawBody = Buffer.from(await req.arrayBuffer());
+  const apiKey = process.env.AGP_API_KEY ?? "";
+  const signature = req.headers.get("x-signature") ?? "";
+
+  // Verifikasi HMAC-SHA256 jika ada signature di header
+  if (apiKey && signature) {
+    const isValid = verifySignature(rawBody, signature, apiKey);
+    if (!isValid) {
+      return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+    }
+  }
+
+  // Parse payload
   let payload: {
     event?: string;
     timestamp?: string;
@@ -49,68 +71,42 @@ export async function POST(req: NextRequest) {
   try {
     payload = JSON.parse(rawBody.toString("utf-8"));
   } catch {
-    // Return 200 even for invalid JSON — verification pings may send empty body
+    // Verification ping dengan empty body
     return NextResponse.json({ message: "OK" }, { status: 200 });
   }
 
   const { event, transaction } = payload;
 
-  // ── 4. Filter event yang relevan ───────────────────────────────────────────
-  // Return 200 for all unrecognized/verification payloads
+  // Return 200 untuk verification pings atau event yang tidak dikenal
   if (!event || !transaction) {
     return NextResponse.json({ message: "OK" }, { status: 200 });
   }
 
   if (event !== "transaction.received") {
-    return NextResponse.json({ message: "Ignored — event not relevant" }, { status: 200 });
+    return NextResponse.json({ message: "Ignored" }, { status: 200 });
   }
 
-  // Hanya proses settlement (pembayaran berhasil)
   if (transaction.status !== "settlement") {
-    return NextResponse.json({ message: `Ignored — status: ${transaction.status}` }, { status: 200 });
+    return NextResponse.json({ message: "Ignored" }, { status: 200 });
   }
 
-  // Hanya proses ShopeePay (issuer: shopeepay) atau qris
-  const issuer = (transaction.issuer ?? "").toLowerCase();
-  if (issuer && issuer !== "shopeepay" && issuer !== "qris") {
-    return NextResponse.json({ message: `Ignored — issuer: ${issuer}` }, { status: 200 });
-  }
-
-  // Validasi amount minimal
   const amount = transaction.amount ?? 0;
   if (amount < 500) {
     return NextResponse.json({ message: "Ignored — amount too low" }, { status: 200 });
   }
 
-  // ── 5. Cari order yang cocok ───────────────────────────────────────────────
-  // Strategi 1: cari berdasarkan transaction.id (AutoGoPay's internal TRX-xxx)
+  // Cari order: by transaction.id dulu, fallback by amount
   let order = transaction.id ? getOrderByPgTxId(transaction.id) : undefined;
-
-  // Strategi 2: fallback — cari berdasarkan amount (untuk ShopeePay yang tidak
-  // mengirim order_sn di webhook payload)
-  if (!order) {
-    order = getOrderByAmount(amount);
-  }
+  if (!order) order = getOrderByAmount(amount);
 
   if (!order) {
-    // Order tidak ada di store (cold start / serverless restart)
-    // Tetap return 200 agar AutoGoPay tidak retry terus
-    console.warn(`[Webhook] Order tidak ditemukan — txId: ${transaction.id}, amount: ${amount}`);
     return NextResponse.json({ message: "OK (order not in store)" }, { status: 200 });
   }
 
-  // ── 6. Tandai order sebagai selesai ───────────────────────────────────────
   const completed = completeOrder(order.orderId, order.phone);
-
   if (!completed) {
-    // Sudah selesai sebelumnya (idempotency)
     return NextResponse.json({ message: "OK (already completed)" }, { status: 200 });
   }
 
-  console.log(`[Webhook] ✅ Order selesai: ${order.orderId} | Amount: ${amount} | Issuer: ${issuer}`);
-
-  return NextResponse.json({
-    message: "OK",
-    orderId: completed.orderId,
-  });
+  return NextResponse.json({ message: "OK", orderId: completed.orderId });
 }
