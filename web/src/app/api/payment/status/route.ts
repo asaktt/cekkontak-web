@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOrder, completeOrder, decodePhoneFromOrderId } from "@/lib/orderStore";
 
-const CASAKU_BASE = "https://api.casaku.id";
+const AGP_BASE = "https://api.pg.sphixray.com";
 
 export async function GET(req: NextRequest) {
   const orderId = req.nextUrl.searchParams.get("orderId");
@@ -24,26 +24,30 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ orderId: order.orderId, status: "expired", searchToken: null });
   }
 
-  // Always query Casaku directly — authoritative source, also works after cold starts
-  const licenseKey = process.env.CASAKU_LICENSE_KEY;
-  const casakuTxId = order?.casaku_txid;
+  // Query AutoGoPay ShopeePay transactions and match by order_sn
+  const apiKey = process.env.AGP_API_KEY;
+  const pgTxId = order?.pg_txid; // ShopeePay order_sn
 
-  if (licenseKey && casakuTxId) {
+  if (apiKey && pgTxId) {
     try {
-      const res = await fetch(`${CASAKU_BASE}/api/generate/check-status`, {
-        method: "POST",
+      const params = new URLSearchParams({ limit: "20" });
+      const res = await fetch(`${AGP_BASE}/shopeepay/transactions?${params}`, {
         headers: {
-          "Content-Type": "application/json",
-          "x-license-key": licenseKey,
+          "Authorization": `Bearer ${apiKey}`,
         },
-        body: JSON.stringify({ transactionId: casakuTxId }),
       });
 
       const data = await res.json();
-      // Casaku status values: "pending" | "paid" | "cancel" | "expired"
-      const txStatus: string = data?.data?.status ?? data?.status ?? "";
+      // AutoGoPay ShopeePay transaction fields:
+      // order_sn, amount, status (1 = paid/success), is_money_in
+      const transactions: Array<{ order_sn: string; status: number; is_money_in: boolean }> =
+        data?.data?.transactions ?? [];
 
-      if (txStatus === "paid") {
+      const matched = transactions.find(
+        (tx) => tx.order_sn === pgTxId && tx.is_money_in && tx.status === 1
+      );
+
+      if (matched) {
         // Decode phone from orderId for cold-start resilience
         const phone = order?.phone ?? decodePhoneFromOrderId(orderId) ?? "";
         const completed = completeOrder(orderId, phone);
@@ -53,12 +57,8 @@ export async function GET(req: NextRequest) {
           searchToken: completed?.searchToken ?? null,
         });
       }
-
-      if (txStatus === "cancel" || txStatus === "expired") {
-        return NextResponse.json({ orderId, status: "expired", searchToken: null });
-      }
     } catch {
-      // If Casaku unreachable, fall through to pending
+      // If AutoGoPay unreachable, fall through to pending
     }
   }
 

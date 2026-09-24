@@ -1,33 +1,38 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
-import { getOrderByCasakuTxId, completeOrder } from "@/lib/orderStore";
+import { getOrderByPgTxId, completeOrder } from "@/lib/orderStore";
 
 /**
- * Casaku webhook — called when payment status changes to "paid".
+ * AutoGoPay webhook — called when payment status changes to "settlement"/"paid".
  *
- * Casaku sends:
+ * AutoGoPay sends (ShopeePay):
  * {
- *   "transactionId": "CSK-xxxx",
- *   "amount": 524,
- *   "packageName": "com.company.paymentapp",
- *   "appName": "Payment App Name",
- *   "status": "paid",
- *   "paidAt": "2026-06-04T03:38:35Z"
+ *   "event": "transaction.received",
+ *   "timestamp": "2024-03-29 14:30:45",
+ *   "transaction": {
+ *     "id": "TRX-001",
+ *     "time": "2024-03-29 14:30:40",
+ *     "amount": 500,
+ *     "currency": "IDR",
+ *     "payment_type": "qris",
+ *     "status": "settlement",
+ *     "issuer": "shopeepay"
+ *   }
  * }
  *
- * Security: Casaku signs payload with HMAC-SHA256 via X-Casaku-Signature header.
+ * Security: AutoGoPay signs payload with HMAC-SHA256 via X-Signature header.
  * We MUST verify using raw body (before JSON parse) and timingSafeEqual.
- * Configure webhook URL in: https://casaku.id/webhook
+ * Configure webhook URL in: https://pg.sphixray.com/dashboard
  */
 export async function POST(req: NextRequest) {
-  const webhookSecret = process.env.CASAKU_WEBHOOK_SECRET;
+  const webhookSecret = process.env.AGP_API_KEY; // AutoGoPay uses API key as HMAC secret
 
   // Read raw body as Buffer for HMAC verification
   const rawBody = Buffer.from(await req.arrayBuffer());
 
   // Verify HMAC-SHA256 signature if secret is configured
   if (webhookSecret) {
-    const signature = req.headers.get("x-casaku-signature") ?? "";
+    const signature = req.headers.get("x-signature") ?? "";
     const expected = crypto
       .createHmac("sha256", webhookSecret)
       .update(rawBody)         // raw body — must NOT parse JSON first
@@ -47,12 +52,15 @@ export async function POST(req: NextRequest) {
   }
 
   let payload: {
-    transactionId?: string;
-    amount?: number;
-    status?: string;
-    packageName?: string;
-    appName?: string;
-    paidAt?: string;
+    event?: string;
+    timestamp?: string;
+    transaction?: {
+      id?: string;
+      amount?: number;
+      status?: string;
+      payment_type?: string;
+      issuer?: string;
+    };
   };
 
   try {
@@ -61,24 +69,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { transactionId, status, amount } = payload;
+  const { event, transaction } = payload;
 
-  if (!transactionId || !status) {
+  if (!event || !transaction?.id) {
     return NextResponse.json({ error: "Bad payload" }, { status: 400 });
   }
 
-  // Only process paid notifications
-  if (status !== "paid") {
+  // Only process payment received events
+  if (event !== "transaction.received") {
     return NextResponse.json({ message: "Ignored" }, { status: 200 });
   }
 
-  // Validate amount (base 500, unique code may vary so allow >= 500)
-  if (typeof amount === "number" && amount < 500) {
+  // Only process settlement status
+  if (transaction.status !== "settlement") {
+    return NextResponse.json({ message: "Ignored" }, { status: 200 });
+  }
+
+  // Validate amount (base 500)
+  if (typeof transaction.amount === "number" && transaction.amount < 500) {
     return NextResponse.json({ message: "Ignored — amount too low" }, { status: 200 });
   }
 
-  // Lookup order by Casaku transactionId
-  const order = getOrderByCasakuTxId(transactionId);
+  // Lookup order by AutoGoPay transaction ID
+  const order = getOrderByPgTxId(transaction.id);
 
   if (!order) {
     // Order not in store (cold start) — still OK, just log it

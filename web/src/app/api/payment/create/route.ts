@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createOrder, setOrderQrisUrl, setOrderCasakuTxId } from "@/lib/orderStore";
+import { createOrder, setOrderQrisUrl, setOrderPgTxId } from "@/lib/orderStore";
 import { rateLimit, getIp } from "@/lib/rateLimit";
 
-const CASAKU_BASE = "https://api.casaku.id";
+const AGP_BASE = "https://api.pg.sphixray.com";
+const AGP_API_KEY = process.env.AGP_API_KEY;
 
 // Validate phone — accept only digits, +, spaces, dashes
 function isValidPhone(p: string): boolean {
@@ -36,11 +37,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Format nomor HP tidak valid" }, { status: 400 });
   }
 
-  const licenseKey = process.env.CASAKU_LICENSE_KEY;
-  const qrisId = process.env.CASAKU_QRIS_ID;
-  if (!licenseKey || !qrisId) {
+  if (!AGP_API_KEY) {
     return NextResponse.json(
-      { error: "Casaku belum dikonfigurasi" },
+      { error: "Payment gateway belum dikonfigurasi" },
       { status: 500 }
     );
   }
@@ -49,58 +48,54 @@ export async function POST(req: NextRequest) {
   const order = createOrder(phone);
 
   try {
-    // POST to Casaku API v2 — returns QR string and transactionId
-    const res = await fetch(`${CASAKU_BASE}/api/generate/v2/qris`, {
+    // POST to AutoGoPay ShopeePay QRIS — returns qr_string, qr_url, order_sn
+    const res = await fetch(`${AGP_BASE}/shopeepay/qris/create`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-license-key": licenseKey,
+        "Authorization": `Bearer ${AGP_API_KEY}`,
       },
       body: JSON.stringify({
-        qr_id: qrisId,
         amount: 500,
-        useUniqueCode: true,
-        expiredInMinutes: 15,
-        prefix: "CCK",
       }),
     });
 
     const data = await res.json();
 
-    if (!res.ok) {
+    if (!res.ok || !data?.success) {
       return NextResponse.json(
         { error: data?.message ?? "Gagal membuat transaksi QRIS" },
-        { status: res.status }
+        { status: res.ok ? 500 : res.status }
       );
     }
 
-    // Casaku response fields (inside data.data):
-    // transactionId  = Casaku-generated ID (e.g. "CSK-xxxx")
-    // qr_string      = QRIS string to render as QR code
-    // totalAmount    = actual amount user pays (includes unique code, e.g. 524)
-    // amount         = base amount (500)
-    // expiredAt      = ISO expiry timestamp
+    // AutoGoPay ShopeePay response fields (inside data.data):
+    // order_sn       = ShopeePay order serial number (for status polling)
+    // qr_string      = Raw QRIS string to render as QR code
+    // qr_url         = URL to hosted QR image
+    // amount         = payment amount
+    // expiry_time    = expiry timestamp (WIB)
     const tx = data?.data;
-    const casakuTxId: string | null = tx?.transactionId ?? null;
+    const pgTxId: string | null = tx?.order_sn ?? null;
     const qrString: string | null = tx?.qr_string ?? null;
-    const expiredAt: string | null = tx?.expiredAt ?? null;
-    const actualAmount: number = tx?.totalAmount ?? tx?.amount ?? 500;
-    const uniqueCode: number = (actualAmount ?? 500) - 500;
+    const qrUrl: string | null = tx?.qr_url ?? null;
+    const expiredAt: string | null = tx?.expiry_time ?? null;
+    const actualAmount: number = tx?.amount ?? 500;
 
     if (qrString) {
       setOrderQrisUrl(order.orderId, qrString);
     }
-    if (casakuTxId) {
-      setOrderCasakuTxId(order.orderId, casakuTxId);
+    if (pgTxId) {
+      setOrderPgTxId(order.orderId, pgTxId);
     }
 
     return NextResponse.json({
       orderId: order.orderId,
-      casakuTxId,              // Casaku transactionId — needed for status polling
-      amount: actualAmount,    // totalAmount — real amount user pays (e.g. 524)
-      baseAmount: 500,         // base service price
-      fee: uniqueCode,         // unique code added by Casaku
+      pgTxId,              // ShopeePay order_sn — needed for status polling
+      amount: actualAmount,
+      baseAmount: 500,
       qrString,
+      qrUrl,
       expiredAt,
     });
   } catch (e: unknown) {

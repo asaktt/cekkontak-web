@@ -1,7 +1,7 @@
 // ── In-Memory Order / Payment Store ─────────────────────────────────────────
 // Stores pending & completed payment orders.
 // NOTE: In-memory resets on cold start.
-// Resilience: status route also queries Casaku API directly as fallback.
+// Resilience: status route also queries AutoGoPay API directly as fallback.
 
 import crypto from "crypto";
 
@@ -13,7 +13,7 @@ export interface Order {
   amount: number;
   status: OrderStatus;
   qrisUrl: string | null;
-  casaku_txid: string | null;  // Casaku-generated transactionId (e.g. CSK-xxxx)
+  pg_txid: string | null;  // Payment gateway transaction/order ID (e.g. ShopeePay order_sn)
   createdAt: string;
   completedAt: string | null;
   searchToken: string | null;
@@ -21,8 +21,8 @@ export interface Order {
 
 const orderStore = new Map<string, Order>();
 
-// Secondary index: casaku transactionId → orderId (for webhook lookup)
-const casakuTxMap = new Map<string, string>();
+// Secondary index: pg transaction ID → orderId (for webhook lookup)
+const pgTxMap = new Map<string, string>();
 
 const ORDER_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -41,7 +41,7 @@ export function createOrder(phone: string): Order {
     amount: 500,
     status: "pending",
     qrisUrl: null,
-    casaku_txid: null,
+    pg_txid: null,
     createdAt: new Date().toISOString(),
     completedAt: null,
     searchToken: null,
@@ -83,21 +83,34 @@ export function setOrderQrisUrl(orderId: string, qrisUrl: string): void {
   if (order) orderStore.set(orderId, { ...order, qrisUrl });
 }
 
-// ── Set Casaku Transaction ID ────────────────────────────────────────────────
-// Called after Casaku returns transactionId on payment creation.
-export function setOrderCasakuTxId(orderId: string, casakuTxId: string): void {
+// ── Set Payment Gateway Transaction ID ───────────────────────────────────────
+// Called after AutoGoPay returns order_sn on payment creation.
+export function setOrderPgTxId(orderId: string, pgTxId: string): void {
   const order = orderStore.get(orderId);
   if (order) {
-    orderStore.set(orderId, { ...order, casaku_txid: casakuTxId });
-    casakuTxMap.set(casakuTxId, orderId);
+    orderStore.set(orderId, { ...order, pg_txid: pgTxId });
+    pgTxMap.set(pgTxId, orderId);
   }
 }
 
-// ── Lookup order by Casaku transaction ID (for webhook) ──────────────────────
-export function getOrderByCasakuTxId(casakuTxId: string): Order | undefined {
-  const orderId = casakuTxMap.get(casakuTxId);
+// ── Lookup order by PG transaction ID (for webhook) ──────────────────────────
+export function getOrderByPgTxId(pgTxId: string): Order | undefined {
+  const orderId = pgTxMap.get(pgTxId);
   if (!orderId) return undefined;
   return getOrder(orderId);
+}
+
+// ── Lookup pending order by amount (ShopeePay webhook fallback) ───────────────
+// ShopeePay webhook doesn't return order_sn — match by amount + pending status.
+// Returns the most recent pending order with matching amount.
+export function getOrderByAmount(amount: number): Order | undefined {
+  let best: Order | undefined;
+  for (const [, order] of orderStore) {
+    if (order.status === "pending" && order.amount === amount) {
+      if (!best || order.createdAt > best.createdAt) best = order;
+    }
+  }
+  return best;
 }
 
 // ── Complete Payment ─────────────────────────────────────────────────────────
@@ -121,7 +134,7 @@ export function completeOrder(orderId: string, phone?: string): Order | null {
         amount: 500,
         status: "completed",
         qrisUrl: null,
-        casaku_txid: null,
+        pg_txid: null,
         createdAt: new Date().toISOString(),
         completedAt: new Date().toISOString(),
         searchToken,
