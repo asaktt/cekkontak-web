@@ -49,14 +49,16 @@ export async function POST(req: NextRequest) {
   try {
     payload = JSON.parse(rawBody.toString("utf-8"));
   } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+    // Return 200 even for invalid JSON — verification pings may send empty body
+    return NextResponse.json({ message: "OK" }, { status: 200 });
   }
 
   const { event, transaction } = payload;
 
   // ── 4. Filter event yang relevan ───────────────────────────────────────────
+  // Return 200 for all unrecognized/verification payloads
   if (!event || !transaction) {
-    return NextResponse.json({ error: "Bad payload" }, { status: 400 });
+    return NextResponse.json({ message: "OK" }, { status: 200 });
   }
 
   if (event !== "transaction.received") {
