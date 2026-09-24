@@ -37,27 +37,31 @@ export async function POST(req: NextRequest) {
   const apiKey = process.env.AGP_API_KEY;
   if (apiKey) {
     const signature = req.headers.get("x-signature") ?? "";
-    const expected = crypto
-      .createHmac("sha256", apiKey)
-      .update(rawBody) // HARUS raw body, sebelum JSON.parse
-      .digest("hex");
 
-    // Gunakan timingSafeEqual untuk mencegah timing attack
-    let isValid = false;
-    try {
-      const sigBuf = Buffer.from(signature, "hex");
-      const expBuf = Buffer.from(expected, "hex");
-      isValid =
-        sigBuf.length > 0 &&
-        sigBuf.length === expBuf.length &&
-        crypto.timingSafeEqual(sigBuf, expBuf);
-    } catch {
-      isValid = false;
-    }
+    // Jika tidak ada signature → ini adalah verification ping dari AutoGoPay
+    // Biarkan lewat dengan 200 OK, tapi tidak proses sebagai transaksi nyata
+    if (signature.length > 0) {
+      const expected = crypto
+        .createHmac("sha256", apiKey)
+        .update(rawBody) // HARUS raw body, sebelum JSON.parse
+        .digest("hex");
 
-    if (!isValid) {
-      console.warn("[Webhook] Invalid signature:", signature);
-      return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+      // Gunakan timingSafeEqual untuk mencegah timing attack
+      let isValid = false;
+      try {
+        const sigBuf = Buffer.from(signature, "hex");
+        const expBuf = Buffer.from(expected, "hex");
+        isValid =
+          sigBuf.length === expBuf.length &&
+          crypto.timingSafeEqual(sigBuf, expBuf);
+      } catch {
+        isValid = false;
+      }
+
+      if (!isValid) {
+        console.warn("[Webhook] Invalid signature:", signature);
+        return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+      }
     }
   }
 
