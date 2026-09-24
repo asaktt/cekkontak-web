@@ -9,6 +9,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "orderId diperlukan" }, { status: 400 });
   }
 
+  // pgTxId bisa dari in-memory store ATAU dikirim langsung dari frontend
+  // (cold-start resilience: frontend pass pgTxId dari response create)
+  const pgTxIdFromUrl = req.nextUrl.searchParams.get("pgTxId");
+
   const order = getOrder(orderId);
 
   // If already completed in store, return token immediately
@@ -24,9 +28,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ orderId: order.orderId, status: "expired", searchToken: null });
   }
 
-  // Query SphixRay ShopeePay transactions and match by order_sn
+  // Gunakan pgTxId dari store, atau fallback dari URL param (cold-start safe)
   const apiKey = process.env.AGP_API_KEY;
-  const pgTxId = order?.pg_txid; // ShopeePay order_sn
+  const pgTxId = order?.pg_txid ?? pgTxIdFromUrl;
 
   if (apiKey && pgTxId) {
     try {
@@ -38,8 +42,6 @@ export async function GET(req: NextRequest) {
       });
 
       const data = await res.json();
-      // SphixRay ShopeePay transaction fields:
-      // order_sn, amount, status (1 = paid/success), is_money_in
       const transactions: Array<{ order_sn: string; status: number; is_money_in: boolean }> =
         data?.data?.transactions ?? [];
 
@@ -48,6 +50,7 @@ export async function GET(req: NextRequest) {
       );
 
       if (matched) {
+        // Decode phone from orderId (works even after cold start)
         const phone = order?.phone ?? decodePhoneFromOrderId(orderId) ?? "";
         const completed = completeOrder(orderId, phone);
         return NextResponse.json({
@@ -57,7 +60,7 @@ export async function GET(req: NextRequest) {
         });
       }
     } catch {
-      // If SphixRay unreachable, fall through to pending
+      // Jika SphixRay unreachable, fall through to pending
     }
   }
 

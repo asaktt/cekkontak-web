@@ -136,9 +136,10 @@ function PaymentModal({ phone, onClose, onSearchToken }: {
       if (!res.ok) throw new Error(data.error ?? "Gagal membuat transaksi");
       setOrderId(data.orderId); setQrString(data.qrString ?? null); setPaymentUrl(data.paymentUrl ?? null);
       setExpiredAt(data.expiredAt ?? null); setActualAmount(data.amount ?? 500); setFee(data.fee ?? 0); setPayStatus("waiting");
+      const pgTxId = data.pgTxId ?? null;
       pollRef.current = setInterval(async () => {
         try {
-          const sr = await fetch(`/api/payment/status?orderId=${data.orderId}`);
+          const sr = await fetch(`/api/payment/status?orderId=${data.orderId}${data.pgTxId ? `&pgTxId=${data.pgTxId}` : ""}`);
           const sd = await sr.json();
           if (sd.status === "completed" && sd.searchToken) { if (pollRef.current) clearInterval(pollRef.current); setPayStatus("paid"); setTimeout(() => onSearchToken(sd.searchToken), 800); }
           else if (sd.status === "expired") { if (pollRef.current) clearInterval(pollRef.current); setPayStatus("error"); setPayError("Transaksi kadaluarsa. Coba lagi."); }
