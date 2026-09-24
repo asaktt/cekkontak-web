@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
   const order = createOrder(phone);
 
   try {
-    // POST to AutoGoPay ShopeePay QRIS — returns qr_string, qr_url, order_sn
+    // POST to SphixRay ShopeePay QRIS — returns qr_string, qr_url, order_sn
     const res = await fetch(`${AGP_BASE}/shopeepay/qris/create`, {
       method: "POST",
       headers: {
@@ -69,7 +69,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // AutoGoPay ShopeePay response fields (inside data.data):
+    // SphixRay ShopeePay response fields (inside data.data):
     // order_sn       = ShopeePay order serial number (for status polling)
     // qr_string      = Raw QRIS string to render as QR code
     // qr_url         = URL to hosted QR image
@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       orderId: order.orderId,
-      pgTxId,              // ShopeePay order_sn — needed for status polling
+      pgTxId,
       amount: actualAmount,
       baseAmount: 500,
       qrString,

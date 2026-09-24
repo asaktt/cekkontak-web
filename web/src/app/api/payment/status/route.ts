@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ orderId: order.orderId, status: "expired", searchToken: null });
   }
 
-  // Query AutoGoPay ShopeePay transactions and match by order_sn
+  // Query SphixRay ShopeePay transactions and match by order_sn
   const apiKey = process.env.AGP_API_KEY;
   const pgTxId = order?.pg_txid; // ShopeePay order_sn
 
@@ -38,7 +38,7 @@ export async function GET(req: NextRequest) {
       });
 
       const data = await res.json();
-      // AutoGoPay ShopeePay transaction fields:
+      // SphixRay ShopeePay transaction fields:
       // order_sn, amount, status (1 = paid/success), is_money_in
       const transactions: Array<{ order_sn: string; status: number; is_money_in: boolean }> =
         data?.data?.transactions ?? [];
@@ -48,7 +48,6 @@ export async function GET(req: NextRequest) {
       );
 
       if (matched) {
-        // Decode phone from orderId for cold-start resilience
         const phone = order?.phone ?? decodePhoneFromOrderId(orderId) ?? "";
         const completed = completeOrder(orderId, phone);
         return NextResponse.json({
@@ -58,7 +57,7 @@ export async function GET(req: NextRequest) {
         });
       }
     } catch {
-      // If AutoGoPay unreachable, fall through to pending
+      // If SphixRay unreachable, fall through to pending
     }
   }
 
