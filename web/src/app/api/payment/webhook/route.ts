@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
-import { getOrderByPgTxId, getOrderByAmount, completeOrder } from "@/lib/orderStore";
+import { getOrderByPgTxId, completeOrder } from "@/lib/orderStore";
 
 /**
  * SphixRay / AutoGoPay Webhook Handler
@@ -96,11 +96,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true }, { status: 200 });
   }
 
-  // Cari order: by transaction.id dulu, fallback by amount
-  let order = transaction.id ? getOrderByPgTxId(transaction.id) : undefined;
-  if (!order) order = getOrderByAmount(amount);
+  // Cari order by transaction.id (= order_sn dari ShopeePay QRIS)
+  // TIDAK fallback by amount — amount Rp500 sama semua order, bisa salah matching!
+  const order = transaction.id ? getOrderByPgTxId(transaction.id) : undefined;
 
   if (!order) {
+    // Order tidak ditemukan — bisa jadi transaksi dari sumber lain, abaikan
+    console.log(`[Webhook] Order tidak ditemukan untuk tx.id=${transaction.id}`);
     return NextResponse.json({ success: true }, { status: 200 });
   }
 
